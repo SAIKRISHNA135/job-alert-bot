@@ -43,7 +43,7 @@ def fetch_jobs():
             "tags": ["Skill match", "Remote/Flexibility"]  # adjust as needed
         })
 
-print(f"Fetched {len(jobs)} jobs")
+    print(f"Fetched {len(jobs)} jobs")
     return jobs
 
 # Update Google Sheet with new jobs
