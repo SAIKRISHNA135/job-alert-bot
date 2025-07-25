@@ -42,6 +42,8 @@ def fetch_jobs():
             "summary": job.get("description"),
             "tags": ["Skill match", "Remote/Flexibility"]  # adjust as needed
         })
+
+print(f"Fetched {len(jobs)} jobs")
     return jobs
 
 # Update Google Sheet with new jobs
