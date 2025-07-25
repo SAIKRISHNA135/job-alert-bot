@@ -1,93 +1,101 @@
+import os
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 import requests
 import smtplib
-from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-import gspread
-from datetime import datetime
-from oauth2client.service_account import ServiceAccountCredentials
-import os
+from email.mime.multipart import MIMEMultipart
 
-# Load credentials from environment variables
-GMAIL_ADDRESS = os.environ["GMAIL_ADDRESS"]
-GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
-SERPAPI_KEY = os.environ["SERPAPI_KEY"]
-GOOGLE_SHEET_ID = os.environ["GOOGLE_SHEET_ID"]
-
-# Define job titles
-job_roles = [
-    "SAP Hybris Developer", "SAP Commerce Cloud Developer", "Java Full Stack Developer",
-    "Java Backend Developer", "Frontend Developer React", "Frontend Developer Angular"
-]
-
-# Initialize Google Sheets API
+# Initialize Google Sheet connection
 def init_sheet():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
     creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
     client = gspread.authorize(creds)
-    return client.open_by_key(GOOGLE_SHEET_ID).sheet1
+    sheet_id = os.getenv("GOOGLE_SHEET_ID")
+    sheet = client.open_by_key(sheet_id).sheet1
+    return sheet
 
-# Email sender
-def send_email(job_list):
-    msg = MIMEMultipart()
-    msg["From"] = GMAIL_ADDRESS
-    msg["To"] = GMAIL_ADDRESS
-    msg["Subject"] = "📬 Hourly Job Alerts - SAP/Java/Frontend Roles"
+# Example: Fetch jobs from SerpApi (replace with your actual scraping logic)
+def fetch_jobs():
+    serpapi_key = os.getenv("SERPAPI_KEY")
+    # Example query parameters — customize as needed
+    params = {
+        "engine": "google_jobs",
+        "q": "SAP Hybris Developer OR Java Full Stack Developer OR Frontend Developer",
+        "location": "United States",
+        "api_key": serpapi_key,
+        "limit": 20
+    }
+    response = requests.get("https://serpapi.com/search.json", params=params)
+    data = response.json()
+    # Extract and return job info list - you need to adapt this based on actual response structure
+    jobs = []
+    for job in data.get("jobs_results", []):
+        jobs.append({
+            "title": job.get("title"),
+            "company": job.get("company_name"),
+            "location": job.get("location"),
+            "link": job.get("link"),
+            "summary": job.get("description"),
+            "tags": ["Skill match", "Remote/Flexibility"]  # adjust as needed
+        })
+    return jobs
 
+# Update Google Sheet with new jobs
+def update_sheet(sheet, jobs):
+    # Clear existing data except headers (assuming headers on row 1)
+    sheet.resize(rows=1)
+    # Append header row if needed
+    sheet.append_row(["Job Title", "Company", "Location", "Apply Link", "Summary", "Tags"])
+    for job in jobs:
+        sheet.append_row([
+            job["title"],
+            job["company"],
+            job["location"],
+            job["link"],
+            job["summary"],
+            ", ".join(job["tags"])
+        ])
+
+# Send email alert with job listings
+def send_email(jobs):
+    gmail_user = os.getenv("GMAIL_ADDRESS")
+    gmail_password = os.getenv("GMAIL_APP_PASSWORD")
+    to_email = gmail_user  # or set a different recipient
+
+    subject = f"Hourly Job Alert: {len(jobs)} new jobs found"
     body = ""
-    for job in job_list:
-        body += f"""**{job['title']}**  
-Company: {job['company']}  
-Location: {job['location']}  
-🔗 [Apply Now]({job['link']})  
-Summary: {job['summary']}  
-Tags: {job['tags']}\n\n"""
+    for job in jobs:
+        body += f"{job['title']} at {job['company']} ({job['location']})\n"
+        body += f"Apply here: {job['link']}\n"
+        body += f"Summary: {job['summary']}\n"
+        body += f"Tags: {', '.join(job['tags'])}\n\n"
 
+    msg = MIMEMultipart()
+    msg["From"] = gmail_user
+    msg["To"] = to_email
+    msg["Subject"] = subject
     msg.attach(MIMEText(body, "plain"))
 
-    with smtplib.SMTP("smtp.gmail.com", 587) as server:
-        server.starttls()
-        server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-        server.send_message(msg)
-
-# Get jobs from SerpApi
-def fetch_jobs():
-    all_jobs = []
-    for role in job_roles:
-        url = f"https://serpapi.com/search.json?q={role.replace(' ', '+')}+United+States&engine=google_jobs&api_key={SERPAPI_KEY}"
-        res = requests.get(url)
-        jobs = res.json().get("jobs_results", [])
-        for job in jobs[:5]:
-            all_jobs.append({
-                "title": job.get("title", "N/A"),
-                "company": job.get("company_name", "N/A"),
-                "location": job.get("location", "N/A"),
-                "link": job.get("related_links", [{}])[0].get("link", ""),
-                "summary": job.get("description", "").replace("\n", " ")[:150] + "...",
-                "tags": "[Skill Match, U.S., Remote/Flexibility]",
-                "timestamp": datetime.now().isoformat(),
-                "source": "SerpApi"
-            })
-    return all_jobs
-
-# Push new jobs to Sheet
-def update_sheet(sheet, jobs):
-    existing_links = [row[3] for row in sheet.get_all_values()[1:]]
-    new_jobs = []
-    for job in jobs:
-        if job["link"] not in existing_links:
-            sheet.append_row([
-                job["title"], job["company"], job["location"], job["link"],
-                job["summary"], job["tags"], job["timestamp"], job["source"]
-            ])
-            new_jobs.append(job)
-    return new_jobs
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(gmail_user, gmail_password)
+            server.send_message(msg)
+        print("Email sent successfully.")
+    except Exception as e:
+        print("Error sending email:", e)
 
 def main():
     sheet = init_sheet()
     jobs = fetch_jobs()
-    new_jobs = update_sheet(sheet, jobs)
-    if new_jobs:
-        send_email(new_jobs)
+    if jobs:
+        update_sheet(sheet, jobs)
+        send_email(jobs)
+    else:
+        print("No new jobs found.")
 
 if __name__ == "__main__":
     main()
